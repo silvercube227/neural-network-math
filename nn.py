@@ -15,12 +15,26 @@ class Layer_Dense:
 
     #forward pass
     def forward(self, inputs):
+        self.inputs = inputs
         self.output = np.dot(inputs, self.weights) + self.biases
+
+    #backward pass
+    def backward(self, dvalues):
+        #gradient on parameters
+        self.dweights = np.dot(self.inputs.T, dvalues)
+        self.dbiases = np.sum(dvalues, axis=0, keepdims=True)
+        #gradient on values
+        self.dinputs = np.dot(dvalues, self.weights.T)
 
 class Activation_ReLU:
 
     def forward(self, inputs):
+        self.inputs = inputs
         self.output = np.maximum(0, inputs)
+    
+    def backward(self, dvalues):
+        self.dinputs = dvalues.copy()
+        self.dinputs[self.inputs <= 0] = 0
 
 class Activation_Softmax:
     def forward(self, inputs):
@@ -30,6 +44,19 @@ class Activation_Softmax:
         #normalize for each sample
         probabilities = exp_values / np.sum(exp_values, axis=1, keepdims=True)
         self.output = probabilities
+
+    def backward(self, dvalues):
+        #uninitialized array
+        self.dinputs = np.empty_like(dvalues)
+
+        #enumerate outputs and gradients
+        for index, (single_output, single_dvalues) in enumerate(zip(self.output, dvalues)):
+            #flatten output array
+            single_output = single_output.reshape(-1, 1)
+            #calculate jacobian of output
+            jacobian_matrix = np.diagflat(single_output) - np.dot(single_output, single_output.T)
+            #Calculate sample-wise gradient and add to array of sample gradients
+            self.dinputs[index] = np.dot(jacobian_matrix, single_dvalues)
 
 class Loss:
     def calculate(self, output, y):
@@ -52,27 +79,81 @@ class Categorial_Crossentropy(Loss):
         
         negative_log_likelihoods = -np.log(correct_confidences)
         return negative_log_likelihoods
+    
+    def backward(self, dvalues, y_true):
+        #num samples
+        samples = len(dvalues)
+        #num labels in sample
+        labels = len(dvalues[0])
+
+        #if sparse, turn them into one-hot vector
+        if len(y_true.shape) == 1:
+            y_true = np.eye(labels)[y_true]
+        
+        #calculate gradient
+        self.dinputs = -y_true / dvalues
+        #Normalize gradient
+        self.dinputs = self.dinputs/samples
+
+# Softmax classifier - combined Softmax activation
+# and cross-entropy loss for faster backward step
+class Activation_Softmax_Loss_CategoricalCrossentropy():
+    def __init__(self):
+        self.activation = Activation_Softmax()
+        self.loss = Categorial_Crossentropy()
+    
+    def forward(self, inputs, y_true):
+        #output activation function
+        self.activation.forward(inputs)
+        #set the output
+        self.output = self.activation.output
+        #calculate and return loss value
+        return self.loss.calculate(self.output, y_true)
+    
+    def backward(self, dvalues, y_true):
+        #number of samples
+        samples = len(dvalues)
+        #if labels are one-hot (canonical basis vector) encoded, make discrete
+        if len(y_true.shape) == 2:
+            y_true = np.argmax(y_true, axis=1)
+        #copy to safely modify
+        self.dinputs = dvalues.copy()
+        #calculate gradient
+        self.dinputs[range(samples), y_true] -= 1
+        #normalize gradient
+        self.dinputs = self.dinputs/samples
+
 
 X, y = spiral_data(samples=100, classes=3)
 
 dense1 = Layer_Dense(2, 3)
 activation1 = Activation_ReLU()
-dense1.forward(X)
 dense2 = Layer_Dense(3,3)
-activation2 = Activation_Softmax()
-loss_function = Categorial_Crossentropy()
+loss_activation = Activation_Softmax_Loss_CategoricalCrossentropy()
 
 dense1.forward(X)
 #take in ouput from previous layer for activation laye
 activation1.forward(dense1.output)
 dense2.forward(activation1.output)
-activation2.forward(dense2.output)
-loss = loss_function.calculate(activation2.output, y)
+loss = loss_activation.forward(dense2.output, y)
 
-predictions = np.argmax(activation2.output, axis=1)
+print(loss_activation.output[:5])
+
+print(f"loss: {loss}")
+predictions = np.argmax(loss_activation.output, axis=1)
 if len(y.shape) == 2:
     y = np.argmax(y, axis=1)
 accuracy = np.mean(predictions == y)
-print("accuracy: " + accuracy)
+print(f"accuracy: {accuracy}")
 
-print("loss: " + loss)
+
+loss_activation.backward(loss_activation.output, y)
+dense2.backward(loss_activation.dinputs)
+activation1.backward(dense2.dinputs)
+dense1.backward(activation1.dinputs)
+
+print(dense1.dweights)
+print(dense1.dbiases)
+print(dense2.dweights)
+print(dense2.dbiases)
+
