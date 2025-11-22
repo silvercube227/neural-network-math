@@ -126,13 +126,26 @@ class Activation_Softmax_Loss_CategoricalCrossentropy():
 #stochastic gradient descent optimizer
 class Optimizer_SGD:
     #init optimizer, learning rate of 1
-    def __init__(self, learning_rate=1.0):
+    def __init__(self, learning_rate=1.0, decay=0):
         self.learning_rate = learning_rate
+        self.current_learning_rate = learning_rate
+        self.decay = decay
+        self.iterations = 0
+    
+    #call ohce before any parameter updates
+    def pre_update_parameters(self):
+        if self.decay:
+            #learning rate = learning rate * 1/(1+ decay *iterations) - slowly reduces rate
+            self.current_learning_rate = self.learning_rate * \
+                (1. / (1. + self.decay * self.iterations))
     #update parameters
     #subtract learning rate * parameter gradients - slowly minimizes the loss over time
     def update_parameters(self, layer):
         layer.weights += -self.learning_rate * layer.dweights
         layer.biases += -self.learning_rate * layer.dbiases
+    #call once after any param update
+    def post_update_params(self):
+        self.iterations += 1
     
 
 X, y = spiral_data(samples=100, classes=3)
@@ -144,7 +157,7 @@ dense2 = Layer_Dense(64,3)
 #softmax classifier combined loss and activation
 loss_activation = Activation_Softmax_Loss_CategoricalCrossentropy()
 #create optimizer
-optimizer = Optimizer_SGD()
+optimizer = Optimizer_SGD(decay=1e-3)
 
 #use loop to perform training, each loop is epoch
 for epoch in range(10001):
@@ -164,7 +177,10 @@ for epoch in range(10001):
     accuracy = np.mean(predictions == y)
 
     if not epoch % 100:
-        print(f'epoch: {epoch}, ' + f'acc: {accuracy:.3f}, ' + f'loss: {loss:.3f}') 
+        print(f'epoch: {epoch}, ' +
+        f'acc: {accuracy:.3f}, ' +
+        f'loss: {loss:.3f}, ' +
+        f'lr: {optimizer.current_learning_rate}')
 
     #backpropagate 
     loss_activation.backward(loss_activation.output, y)
@@ -173,7 +189,9 @@ for epoch in range(10001):
     dense1.backward(activation1.dinputs)
 
     #update weights and biases with optimizer
+    optimizer.pre_update_parameters()
     optimizer.update_parameters(dense1)
     optimizer.update_parameters(dense2)
+    optimizer.post_update_params()
 
 
