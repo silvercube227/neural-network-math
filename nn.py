@@ -166,8 +166,41 @@ class Optimizer_SGD:
     #call once after any param update
     def post_update_params(self):
         self.iterations += 1
-    
 
+#per parameter learning rate
+#normalize parameter updates by keeping history of previous updates
+#cache stores history of sqrd gradients, parameter updates is fxn of learning rate * gradient
+#then divided by sqrt cach + epsilon valie - hyperparam to prevent div by 0
+class Optimizer_AdaGrad:
+    def __init__(self, learning_rate=1.0, decay=0., epsilon=1e-7):
+            self.learning_rate = learning_rate
+            self.current_learning_rate = learning_rate
+            self.decay = decay
+            self.iterations = 0
+            self.epsilon = epsilon
+    
+    #call ohce before any parameter updates
+    def pre_update_parameters(self):
+        if self.decay:
+            #learning rate = learning rate * 1/(1+ decay *iterations) - slowly reduces rate
+            self.current_learning_rate = self.learning_rate * \
+                (1. / (1. + self.decay * self.iterations))
+    #update parameters
+    #subtract learning rate * parameter gradients - slowly minimizes the loss over time
+    def update_parameters(self, layer):
+        #create cache arrays if we dont have, zero matrix
+        if not hasattr(layer, 'weight_cache'):
+            layer.weight_cache = np.zeros_like(layer.weights)
+            layer.bias_cache = np.zeros_like(layer.biases)
+        #update cache w squared current gradients
+        layer.weight_cache += layer.dweights ** 2
+        layer.bias_cache += layer.dbiases**2
+        #sgd parameter update +normalize w squared root cache
+        layer.weights += -self.current_learning_rate * layer.dweights / (np.sqrt(layer.weight_cache) + self.epsilon)
+        layer.biases += -self.current_learning_rate * layer.dbiases / (np.sqrt(layer.bias_cache) + self.epsilon)
+    #call once after any param update
+    def post_update_params(self):
+        self.iterations += 1
 X, y = spiral_data(samples=100, classes=3)
 #dense layer, 2 input features, 64 outputs
 dense1 = Layer_Dense(2, 64)
@@ -177,7 +210,7 @@ dense2 = Layer_Dense(64,3)
 #softmax classifier combined loss and activation
 loss_activation = Activation_Softmax_Loss_CategoricalCrossentropy()
 #create optimizer
-optimizer = Optimizer_SGD(decay=1e-3, momentum=0.9)
+optimizer = Optimizer_AdaGrad(decay=1e-4)
 
 #use loop to perform training, each loop is epoch
 for epoch in range(10001):
