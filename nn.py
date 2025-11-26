@@ -126,11 +126,12 @@ class Activation_Softmax_Loss_CategoricalCrossentropy():
 #stochastic gradient descent optimizer
 class Optimizer_SGD:
     #init optimizer, learning rate of 1
-    def __init__(self, learning_rate=1.0, decay=0):
+    def __init__(self, learning_rate=1.0, decay=0., momentum=0.):
         self.learning_rate = learning_rate
         self.current_learning_rate = learning_rate
         self.decay = decay
         self.iterations = 0
+        self.momentum = momentum
     
     #call ohce before any parameter updates
     def pre_update_parameters(self):
@@ -141,8 +142,27 @@ class Optimizer_SGD:
     #update parameters
     #subtract learning rate * parameter gradients - slowly minimizes the loss over time
     def update_parameters(self, layer):
-        layer.weights += -self.learning_rate * layer.dweights
-        layer.biases += -self.learning_rate * layer.dbiases
+        #if using momentum
+        if self.momentum:
+           #if layre doesn't have momentum arrays, create zero arrays for them
+            if not hasattr(layer, 'weight_momentums'):
+               layer.weight_momentums = np.zeros_like(layer.weights)
+               #also create for biases
+               layer.bias_momentums = np.zeros_like(layer.biases)
+            #build weight updates with momentum
+            #take previous updates multiplied my retain factor (momentum)
+            #update with current gradients
+            weight_updates = self.momentum * layer.weight_momentums - self.current_learning_rate * layer.dweights
+            layer.weight_momentums = weight_updates
+            bias_updates = self.momentum * layer.bias_momentums - self.current_learning_rate * layer.dbiases
+            layer.bias_momentums = bias_updates
+        #normal updates before momentum
+        else:
+            weight_updates = -self.current_learning_rate * layer.dweights
+            bias_updates = -self.current_learning_rate * layer.dbiases
+            
+        layer.weights += weight_updates
+        layer.biases += bias_updates
     #call once after any param update
     def post_update_params(self):
         self.iterations += 1
@@ -157,7 +177,7 @@ dense2 = Layer_Dense(64,3)
 #softmax classifier combined loss and activation
 loss_activation = Activation_Softmax_Loss_CategoricalCrossentropy()
 #create optimizer
-optimizer = Optimizer_SGD(decay=1e-3)
+optimizer = Optimizer_SGD(decay=1e-3, momentum=0.9)
 
 #use loop to perform training, each loop is epoch
 for epoch in range(10001):
