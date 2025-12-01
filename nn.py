@@ -32,6 +32,23 @@ class Layer_Dense:
         #gradient on parameters
         self.dweights = np.dot(self.inputs.T, dvalues)
         self.dbiases = np.sum(dvalues, axis=0, keepdims=True)
+        #gradients on regularization
+        #dL1: 1 when >=0, -1 when < 0 - technically 0 undef but that doesnt work
+        if self.weight_regularizer_l1 > 0:
+            #init ones array
+            dL1 = np.ones_like(self.weights)
+            dL1[self.weights < 0 ] = -1
+            self.dweights += self.weight_regularizer_l1 * dL1
+        if self.bias_regularizer_l1 > 0:
+            #init ones array
+            dL1 = np.ones_like(self.biases)
+            dL1[self.biases < 0 ] = -1
+            self.dbiases += self.bias_regularizer_l1 * dL1
+        #dL2 - 2w
+        if self.weight_regularizer_l2 > 0:
+            self.dweights += 2 * self.weight_regularizer_l2 * self.weights
+        if self.bias_regularizer_l2 > 0:
+            self.dbiases += 2 * self.bias_regularizer_l2 * self.biases
         #gradient on values
         self.dinputs = np.dot(dvalues, self.weights.T)
 
@@ -316,12 +333,12 @@ class Optimizer_Adam:
     def post_update_params(self):
         self.iterations += 1
 
-X, y = spiral_data(samples=100, classes=3)
+X, y = spiral_data(samples=1000, classes=3)
 #dense layer, 2 input features, 64 outputs
-dense1 = Layer_Dense(2, 64)
+dense1 = Layer_Dense(2, 512, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4)
 activation1 = Activation_ReLU()
 #dense layer, takes the 64 outputs and converts to 3 outputs
-dense2 = Layer_Dense(64,3)
+dense2 = Layer_Dense(512,3)
 #softmax classifier combined loss and activation
 loss_activation = Activation_Softmax_Loss_CategoricalCrossentropy()
 #create optimizer
@@ -348,9 +365,11 @@ for epoch in range(10001):
 
     if not epoch % 100:
         print(f'epoch: {epoch}, ' +
-        f'acc: {accuracy:.3f}, ' +
-        f'loss: {loss:.3f}, ' +
-        f'lr: {optimizer.current_learning_rate}')
+            f'acc: {accuracy:.3f}, ' +
+            f'loss: {loss:.3f} (' +
+            f'data_loss: {data_loss:.3f}, ' +
+            f'reg_loss: {regularization_loss:.3f}), ' +
+            f'lr: {optimizer.current_learning_rate}')
 
     #backpropagate 
     loss_activation.backward(loss_activation.output, y)
