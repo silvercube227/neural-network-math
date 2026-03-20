@@ -84,6 +84,20 @@ class Activation_Softmax:
             #Calculate sample-wise gradient and add to array of sample gradients
             self.dinputs[index] = np.dot(jacobian_matrix, single_dvalues)
 
+#used for regressors, "squishes" range of outputs betwen 0 and 1
+#sigma(i,j) = 1/(1-e^zi,j) z(i,j) = a singular output value of the layer that this activation function takes as input.
+#derivative of sigmoid function is just sigma(i,j) * (1 - sigma(i,j)) - check book for proof this is cool
+class Activation_Sigmoid:
+    #forward pass
+    def forward(self, inputs):
+        #save input, calcute/save outputs of sigmoid function
+        self.inputs = inputs
+        self.output = 1 / (1 - np.exp(-inputs))
+    #backward pass
+    def backward(self, dvalues):
+        self.dinputs = dvalues * (1 - self.output) * self.output
+
+
 class Loss:
     def calculate(self, output, y):
         sample_losses = self.forward(output, y)
@@ -163,6 +177,37 @@ class Activation_Softmax_Loss_CategoricalCrossentropy():
         self.dinputs[range(samples), y_true] -= 1
         #normalize gradient
         self.dinputs = self.dinputs/samples
+
+#use negative log to compute log likelihood
+#sum log likelihoods of correct and incorrect classes for each neuron
+#since binary, incorrect = 1- correct
+#since model contains multiple binary outputs, each neuron outputs prediction, we need a sample loss 
+#sample loss is mean off all losses from single sample - loss from single output is vector of losses for w one val
+#for each prediction
+class Loss_BinaryCrossentropy:
+    def forward(self, y_pred, y_true):
+        #clip data to prevent division by 0 
+        #clip both sides to not drag mean toward any value
+        y_pred_clipped = np.clip(y_pred, 1e-7, 1 - 1e-7)
+        #calculate sample-wise loss
+        sample_loss = -(y_true * np.log(y_pred_clipped) - (1 - y_true) * np.log(1 - y_pred_clipped))
+        sample_losses = np.mean(sample_loss, axis = -1) #-1 tells numpy to calcualte along last dimension
+        #return losses
+        return sample_losses
+    
+    def backward(self, dvalues, y_true):
+        #number of samples
+        samples = len(dvalues)
+        #number of outputs in every sample- use first sample to count
+        outputs = len(dvalues[0])
+        #clip data to prevent division by 0 
+        #clip both sides to not drag mean toward any value
+        clipped_dvalues = np.clip(dvalues, 1e-7, 1 - 1e-7)
+
+        #calculate gradient
+        self.dinputs = -(y_true/clipped_dvalues - (1 - y_true) / (1 - clipped_dvalues)) / outputs
+        #normalize gradient
+        self.dinputs = self.dinputs / samples
 
 #stochastic gradient descent optimizer
 class Optimizer_SGD:
@@ -333,14 +378,49 @@ class Optimizer_Adam:
     def post_update_params(self):
         self.iterations += 1
 
+class Layer_Dropout:
+    #store rate of neurons to dropout = % of neurons we intend to keep
+    def __init__(self, rate):
+        self.rate = 1 - rate
+    #forward pass
+    def forward(self, inputs):
+        #save inputs 
+        self.inputs = inputs
+        #generate and save scaled mask - this is equal to a binomial distribution with success rate
+        #generates an array with % of zeros = to the rate we want, when we multiply our input array by
+        #our binary mask we drop the % of neurons multiplied by those zeros
+        self.binary_mask = np.random.binomial(1, self.rate, size=inputs.shape) / self.rate
+        self.output = inputs * self.binary_mask
+    
+    def backward(self, dvalues):
+        #gradient on values
+        #derivative of the bernoulli distribution is 1/1-q if success, 0 if fail
+        self.dinputs = dvalues * self.binary_mask
+
 X, y = spiral_data(samples=1000, classes=3)
 #dense layer, 2 input features, 64 outputs
+#-- for BINARY LOGISTIC REGRESSION --
+# Reshape labels to be a list of lists
+# Inner list contains one output (either 0 or 1)
+# per each output neuron, 1 in this case
+# y = y.reshape(-1, 1)
+
 dense1 = Layer_Dense(2, 512, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4)
+
+#dense1 = Layer_Dense(2, 64, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4)
 activation1 = Activation_ReLU()
+#dropout layer
+dropout1 = Layer_Dropout(0.1)
 #dense layer, takes the 64 outputs and converts to 3 outputs
 dense2 = Layer_Dense(512,3)
+#dense2 = Layer_Dense(64, 1)
 #softmax classifier combined loss and activation
 loss_activation = Activation_Softmax_Loss_CategoricalCrossentropy()
+#sigmoid activation
+#activation2 = Activation_Sigmoid()
+
+#Loss
+#loss_funciton = Loss_BinaryCrossentropy()
 #create optimizer
 optimizer = Optimizer_Adam(learning_rate=0.05, decay=5e-7)
 
@@ -350,8 +430,10 @@ for epoch in range(10001):
     dense1.forward(X)
     #take in ouput from previous layer for activation laye
     activation1.forward(dense1.output)
+    #forward through dropout 
+    dropout1.forward(activation1.output)
     #forward pass through second layer, takes output of first layer as input
-    dense2.forward(activation1.output)
+    dense2.forward(dense1.output)
     #forward pass through activation/loss, take output of second, return loss
     data_loss = loss_activation.forward(dense2.output, y)
     regularization_loss = loss_activation.loss.regularization_loss(dense1) + loss_activation.loss.regularization_loss(dense2)
@@ -374,7 +456,8 @@ for epoch in range(10001):
     #backpropagate 
     loss_activation.backward(loss_activation.output, y)
     dense2.backward(loss_activation.dinputs)
-    activation1.backward(dense2.dinputs)
+    dropout1.backward(dense2.dinputs)
+    activation1.backward(dropout1.dinputs)
     dense1.backward(activation1.dinputs)
 
     #update weights and biases with optimizer
