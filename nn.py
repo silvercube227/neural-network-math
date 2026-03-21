@@ -2,6 +2,7 @@
 import numpy as np
 import nnfs
 from nnfs.datasets import spiral_data
+from nnfs.datasets import sine_data
 
 nnfs.init()
 
@@ -12,8 +13,9 @@ class Layer_Dense:
     def __init__(self, n_inputs, n_neurons, weight_regularizer_l1=0, 
                  weight_regularizer_l2=0, bias_regularizer_l1=0,
                  bias_regularizer_l2=0):
-        #temporarily generate random weights
-        self.weights = 0.01  * np.random.randn(n_inputs, n_neurons) #inputs before neurons allows us to avoid transposing this matrix
+        #temporarily generate random weights, adjusting the number (0.1) can change the model from learning to not learning - larger number = more variance, more gradient exploding chabce
+        #smalkler number = less variance, clustered closer to 0
+        self.weights = 0.1  * np.random.randn(n_inputs, n_neurons) #inputs before neurons allows us to avoid transposing this matrix
         #zero bias
         self.biases = np.zeros((1,n_neurons))
         #set regularizer strength 
@@ -92,10 +94,22 @@ class Activation_Sigmoid:
     def forward(self, inputs):
         #save input, calcute/save outputs of sigmoid function
         self.inputs = inputs
-        self.output = 1 / (1 - np.exp(-inputs))
+        self.output = 1 / (1 + np.exp(-inputs))
     #backward pass
     def backward(self, dvalues):
         self.dinputs = dvalues * (1 - self.output) * self.output
+
+#use for regression to predict scalar value rather than class
+#y = x , derivative is jsut one
+class Activation_Linear:
+    #forward
+    def forward(self, inputs):
+        self.inputs = inputs
+        self.output = inputs
+    #Backward
+    def backward(self, dvalues):
+        #1 * dvalues = dvalues
+        self.dinputs = dvalues.copy()
 
 
 class Loss:
@@ -184,13 +198,13 @@ class Activation_Softmax_Loss_CategoricalCrossentropy():
 #since model contains multiple binary outputs, each neuron outputs prediction, we need a sample loss 
 #sample loss is mean off all losses from single sample - loss from single output is vector of losses for w one val
 #for each prediction
-class Loss_BinaryCrossentropy:
+class Loss_BinaryCrossentropy(Loss):
     def forward(self, y_pred, y_true):
         #clip data to prevent division by 0 
         #clip both sides to not drag mean toward any value
         y_pred_clipped = np.clip(y_pred, 1e-7, 1 - 1e-7)
         #calculate sample-wise loss
-        sample_loss = -(y_true * np.log(y_pred_clipped) - (1 - y_true) * np.log(1 - y_pred_clipped))
+        sample_loss = -(y_true * np.log(y_pred_clipped) + (1 - y_true) * np.log(1 - y_pred_clipped))
         sample_losses = np.mean(sample_loss, axis = -1) #-1 tells numpy to calcualte along last dimension
         #return losses
         return sample_losses
@@ -208,6 +222,41 @@ class Loss_BinaryCrossentropy:
         self.dinputs = -(y_true/clipped_dvalues - (1 - y_true) / (1 - clipped_dvalues)) / outputs
         #normalize gradient
         self.dinputs = self.dinputs / samples
+    
+#for regression, we need to calculate error between predicted scalar and expected scalar
+#Use either Mean squared error - average of sum of (y - y^)^2 - pnealize harshly the farther you get
+class Loss_MeanSquaredError(Loss): #L2 loss
+    #forward pass 
+    def forward(self, y_pred, y_true):
+        #calculate loss 
+        sample_losses = np.mean((y_true - y_pred)**2, axis=-1)
+        return sample_losses
+    #backward
+    def backward(self, dvalues, y_true):
+        #number of samples
+        samples = len(dvalues)
+        #numberof outputs in every sample
+        #use first sample to count
+        outputs = len(dvalues[0])
+        #gradient on values
+        self.dinputs = -2 * (y_true - dvalues) / outputs
+        #normalize gradient
+        self.dinputs = self.dinputs / samples
+
+#mean absolute error - average of sum of absolute value of difference between true and predicted
+#penalize linearly, sparser results and more robust to outlires
+class Loss_MeanAbsoluteError(Loss):
+    #forward
+    def forward(self, y_pred, y_true):
+        sample_losses = np.mean(np.abs(y_true - y_pred), axis=-1)
+        return sample_losses
+    def backward(self, dvalues, y_true):
+        samples = len(dvalues)
+        outputs = len(dvalues[0])
+        self.dinputs = np.sign(y_true - dvalues) / outputs
+        #normalize gradient
+        self.dinputs = self.dinputs/samples
+
 
 #stochastic gradient descent optimizer
 class Optimizer_SGD:
@@ -397,32 +446,41 @@ class Layer_Dropout:
         #derivative of the bernoulli distribution is 1/1-q if success, 0 if fail
         self.dinputs = dvalues * self.binary_mask
 
-X, y = spiral_data(samples=1000, classes=3)
+X, y = sine_data()
 #dense layer, 2 input features, 64 outputs
 #-- for BINARY LOGISTIC REGRESSION --
 # Reshape labels to be a list of lists
 # Inner list contains one output (either 0 or 1)
 # per each output neuron, 1 in this case
-# y = y.reshape(-1, 1)
+y = y.reshape(-1, 1)
 
-dense1 = Layer_Dense(2, 512, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4)
+#dense1 = Layer_Dense(2, 512, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4)
 
-#dense1 = Layer_Dense(2, 64, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4)
+dense1 = Layer_Dense(1, 64)
 activation1 = Activation_ReLU()
-#dropout layer
-dropout1 = Layer_Dropout(0.1)
 #dense layer, takes the 64 outputs and converts to 3 outputs
-dense2 = Layer_Dense(512,3)
-#dense2 = Layer_Dense(64, 1)
+#dense2 = Layer_Dense(512,3)
+dense2 = Layer_Dense(64, 64) #blr
 #softmax classifier combined loss and activation
-loss_activation = Activation_Softmax_Loss_CategoricalCrossentropy()
+#loss_activation = Activation_Softmax_Loss_CategoricalCrossentropy()
 #sigmoid activation
-#activation2 = Activation_Sigmoid()
+activation2 = Activation_ReLU()#blr
+dense3 = Layer_Dense(64, 1)
+activation3 = Activation_Linear()
 
 #Loss
-#loss_funciton = Loss_BinaryCrossentropy()
+loss_activation = Loss_MeanSquaredError()
 #create optimizer
-optimizer = Optimizer_Adam(learning_rate=0.05, decay=5e-7)
+optimizer = Optimizer_Adam(learning_rate=0.005, decay=1e-3)
+
+# Accuracy precision for accuracy calculation
+# There are no really accuracy factor for regression problem,
+# but we can simulate/approximate it. We'll calculate it by checking
+# how many values have a difference to their ground truth equivalent
+# less than given precision
+# We'll calculate this precision as a fraction of standard deviation
+# of al the ground truth values
+accuracy_precision = np.std(y) / 250
 
 #use loop to perform training, each loop is epoch
 for epoch in range(10001):
@@ -431,19 +489,27 @@ for epoch in range(10001):
     #take in ouput from previous layer for activation laye
     activation1.forward(dense1.output)
     #forward through dropout 
-    dropout1.forward(activation1.output)
     #forward pass through second layer, takes output of first layer as input
-    dense2.forward(dense1.output)
-    #forward pass through activation/loss, take output of second, return loss
-    data_loss = loss_activation.forward(dense2.output, y)
-    regularization_loss = loss_activation.loss.regularization_loss(dense1) + loss_activation.loss.regularization_loss(dense2)
+    dense2.forward(activation1.output)
+    #forward pass through sigmoid activation then loss
+    activation2.forward(dense2.output) #blr
+    dense3.forward(activation2.output)
+    activation3.forward(dense3.output)
+    data_loss = loss_activation.calculate(activation3.output, y)
+    #regularization_loss = loss_activation.loss.regularization_loss(dense1) + loss_activation.loss.regularization_loss(dense2)
+    regularization_loss = loss_activation.regularization_loss(dense1) + loss_activation.regularization_loss(dense2) + loss_activation.regularization_loss(dense3) #blr
     loss = data_loss + regularization_loss
 
     print(f"loss: {loss}")
-    predictions = np.argmax(loss_activation.output, axis=1)
-    if len(y.shape) == 2:
-        y = np.argmax(y, axis=1)
-    accuracy = np.mean(predictions == y)
+    #predictions = np.argmax(loss_activation.output, axis=1)
+    # Calculate accuracy from output of activation2 and targets
+    # Part in the brackets returns a binary mask - array consisting
+    # of True/False values, multiplying it by 1 changes it into array
+    # of 1s and 0s
+    predictions = activation3.output #BLS
+    #if len(y.shape) == 2:
+        #y = np.argmax(y, axis=1)
+    accuracy = np.mean(np.absolute(predictions - y) < accuracy_precision)
 
     if not epoch % 100:
         print(f'epoch: {epoch}, ' +
@@ -454,26 +520,35 @@ for epoch in range(10001):
             f'lr: {optimizer.current_learning_rate}')
 
     #backpropagate 
-    loss_activation.backward(loss_activation.output, y)
-    dense2.backward(loss_activation.dinputs)
-    dropout1.backward(dense2.dinputs)
-    activation1.backward(dropout1.dinputs)
+    loss_activation.backward(activation3.output, y)
+    activation3.backward(loss_activation.dinputs) #blr
+    dense3.backward(activation3.dinputs)
+    activation2.backward(dense3.dinputs)
+    dense2.backward(activation2.dinputs)
+    activation1.backward(dense2.dinputs)
     dense1.backward(activation1.dinputs)
 
     #update weights and biases with optimizer
     optimizer.pre_update_parameters()
     optimizer.update_parameters(dense1)
     optimizer.update_parameters(dense2)
+    optimizer.update_parameters(dense3)
     optimizer.post_update_params()
 
 #validate model
-X_test, y_test = spiral_data(samples=100, classes=3)
+import matplotlib.pyplot as plt
+X_test, y_test = sine_data()
 dense1.forward(X_test)
 activation1.forward(dense1.output)
 dense2.forward(activation1.output)
-loss = loss_activation.forward(dense2.output, y_test)
-predictions = np.argmax(loss_activation.output, axis=1)
-if len(y_test.shape) == 2:
-    y_test = np.argmax(y_test, axis=1)
-accuracy = np.mean(predictions == y_test)
+activation2.forward(dense2.output)
+dense3.forward(activation2.output)
+activation3.forward(dense3.output)
+plt.plot(X_test, y_test)
+plt.plot(X_test, activation3.output)
+plt.show()
+
+loss = loss_activation.calculate(activation3.output, y_test)
+predictions = activation3.output
+accuracy = np.mean(np.absolute(predictions - y_test) < accuracy_precision)
 print(f'validation, acc: {accuracy:.3f}, loss: {loss:.3f}')
